@@ -48,6 +48,4 @@ extern void avs_counter_reset();
 extern void avs_counter_adjust_abs(int val);
 extern void avs_counter_get_time_us(signed long long *curr);
 
-extern unsigned long long gettimeofday_curr(void);
-
 #endif

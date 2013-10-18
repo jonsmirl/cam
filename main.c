@@ -13,6 +13,8 @@
 
 #define ENC_FIFO_LEVEL 5
 #define MAX_DISP_ELEMENTS   32
+#define FRAMES 500
+int frames = 0;
 
 typedef struct cache_data {
 	int size;
@@ -56,9 +58,7 @@ cache_data *save_bit_stream = NULL;
 FILE * pEncFile = NULL;
 
 #ifdef __OS_LINUX
-
 char saveFile[128] = "/mnt/h264.dat";
-
 #else
 char saveFile[128] = "/mnt/sdcard/h264.dat";
 #endif
@@ -76,7 +76,7 @@ static __s32 GetFrmBufCB(__s32 uParam1, void *pFrmBufInfo) {
 	int buf_unused;
 	VEnc_FrmBuf_Info encBuf;
 
-	memset((void*) &encBuf, 0, sizeof(VEnc_FrmBuf_Info));
+	memset((void*)&encBuf, 0, sizeof(VEnc_FrmBuf_Info));
 
 	read_id = gBufMrgQ.read_id;
 	buf_unused = gBufMrgQ.buf_unused;
@@ -254,9 +254,9 @@ int save_left_bitstream(cache_data *save_bit_stream, char * tem_data,
 
 VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate,
 		__s32 (*GetFrmBufCB)(__s32 uParam1, void *pFrmBufInfo)) {
-	int ret = -1;
-
 	VENC_DEVICE *pCedarV = NULL;
+	__video_encode_format_t enc_fmt;
+	int ret = -1;
 
 #ifdef USE_SUNXI_MEM_ALLOCATOR
 	sunxi_alloc_open();
@@ -264,9 +264,9 @@ VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate,
 	pCedarV = H264EncInit(&ret);
 	if (ret < 0) {
 		printf("H264EncInit failed\n");
+		return NULL;
 	}
 
-	__video_encode_format_t enc_fmt;
 	enc_fmt.src_width = width;
 	enc_fmt.src_height = height;
 	enc_fmt.width = width;
@@ -280,6 +280,7 @@ VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate,
 	enc_fmt.maxKeyInterval = 8;
 
 	//enc_fmt.profileIdc = 77; /* main profile */
+	//enc_fmt.profileIdc = 100; /* high profile */
 
 	enc_fmt.profileIdc = 66; /* baseline profile */
 	enc_fmt.levelIdc = 31;
@@ -289,6 +290,7 @@ VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate,
 	ret = pCedarV->open(pCedarV);
 	if (ret < 0) {
 		printf("open H264Enc failed\n");
+		return NULL;
 	}
 
 	pCedarV->GetFrmBufCB = GetFrmBufCB;
@@ -304,11 +306,6 @@ void CedarvEncExit(VENC_DEVICE *pCedarV) {
 		pCedarV = NULL;
 	}
 }
-
-#define FRAMES 500
-int frames = 0;
-
-
 
 void *thread_camera() {
 	int ret = -1;
@@ -326,7 +323,7 @@ void *thread_camera() {
 
 		buf_unused = gBufMrgQ.buf_unused;
 
-		//printf("buf_unused: %d\n", buf_unused);
+		printf("buf_unused: %d\n", buf_unused);
 
 		if (buf_unused == 0) {
 			usleep(10 * 1000);
@@ -335,13 +332,12 @@ void *thread_camera() {
 
 		// get one frame
 		ret = GetPreviewFrame(&Buf);
-
-		//printf("GetPreviewFrame: %d\n", ret);
 		if (ret != 0) {
 			usleep(2 * 1000);
 			printf("GetPreviewFrame failed\n");
 			continue;
 		}
+		printf("GetPreviewFrame: %d\n", frames);
 
 		pthread_mutex_lock(&mut_cam_buf);
 

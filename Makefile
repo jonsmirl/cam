@@ -2,7 +2,7 @@ CC  = arm-linux-androideabi-gcc --sysroot=$(SYSROOT)
 CPP  = arm-linux-androideabi-g++ --sysroot=$(SYSROOT)
 CFLAGS  = -Wall -g
 LDFLAGS = -llog
-TARGET	= hello
+TARGET	= cam
 SRCDIRS	=./
 SRC	= $(foreach dir,$(SRCDIRS),$(wildcard $(dir)/*.c))
 OBJ  	:= $(SRC:%.c=%.o)

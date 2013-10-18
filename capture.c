@@ -25,7 +25,6 @@
 #include "type.h"
 #endif
 
-//#include "drv_display.h"
 #include "capture.h"
 #include "cedarv_osal_linux.h"
 
@@ -36,9 +35,7 @@
 #endif
 
 #define DEV_NAME	"/dev/video0"		
-#define NB_BUFFER 5
-
-#define CAMERA_DRIV_UPDATE
+#define NBUFFER 4
 
 typedef struct buffer {
 	void * start;
@@ -52,7 +49,6 @@ __u32 arg[4];
 
 static int mCamFd = NULL;
 struct buffer *buffers = NULL;
-static unsigned int n_buffers = 0;
 
 int mLayer = 0;
 int mDispHandle = 0;
@@ -62,28 +58,23 @@ int mFirstFrame = 1;
 int mFrameId = 0;
 
 static int mCaptureFormat = 0;
-int buf_vir_addr[NB_BUFFER];
-int buf_phy_addr[NB_BUFFER];
+int buf_vir_addr[NBUFFER];
+int buf_phy_addr[NBUFFER];
 
 #define CLEAR(x) memset (&(x), 0, sizeof (x))
 
 int tryFmt(int format) {
 	struct v4l2_fmtdesc fmtdesc;
-	int i;
+
 	fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	for (i = 0; i < 12; i++) {
-		fmtdesc.index = i;
-		if (-1 == ioctl(mCamFd, VIDIOC_ENUM_FMT, &fmtdesc)) {
-			break;
-		}
-		printf("format index = %d, name = %s, v4l2 pixel format = %x \n", i,
+	fmtdesc.index = 0;
+	while (ioctl(mCamFd, VIDIOC_ENUM_FMT, &fmtdesc) != -1) {
+		printf("format index = %d, name = %s, v4l2 pixel format = %x \n", fmtdesc.index,
 				fmtdesc.description, fmtdesc.pixelformat);
-
-		if (fmtdesc.pixelformat == format) {
+		if (fmtdesc.pixelformat == format)
 			return 0;
-		}
+		fmtdesc.index++;
 	}
-
 	return -1;
 }
 
@@ -133,32 +124,31 @@ static void YUYVToNV21(const void* yuyv, void *nv21, int width, int height) {
 }
 #endif
 
-int InitCapture() {
+int InitCapture(void) {
 	struct v4l2_capability cap;
 	struct v4l2_format fmt;
-	unsigned int i;
+	struct v4l2_input inp;
+	struct v4l2_requestbuffers req;
+	struct v4l2_buffer buf;
+	int ret;
+	unsigned int i, buffer_len;
 
 	mCamFd = open(DEV_NAME, O_RDWR /* required */| O_NONBLOCK, 0);
-	if (mCamFd == 0) {
-		printf("open %s failed\n", DEV_NAME);
+	if (mCamFd <= 0) {
+		printf("open %s failed %d\n", DEV_NAME, mCamFd);
 		return -1;
 	}
 
-#ifdef CAMERA_DRIV_UPDATE
-
-	struct v4l2_input inp;
-	int ret;
 	inp.index = 0;
-	if (-1 == ioctl(mCamFd, VIDIOC_S_INPUT, &inp)) {
-		printf("VIDIOC_S_INPUT error!\n");
-		return -1;
+	ret = ioctl(mCamFd, VIDIOC_S_INPUT, &inp);
+	if (ret < 0) {
+		printf("VIDIOC_S_INPUT error! %d\n", ret);
+		return ret;
 	}
-
-#endif	
 
 	ret = ioctl(mCamFd, VIDIOC_QUERYCAP, &cap);
 	if (ret < 0) {
-		printf("Error opening device: unable to query device. \n");
+		printf("Error opening device: unable to query device. %d\n", ret);
 		return -1;
 	}
 
@@ -184,69 +174,76 @@ int InitCapture() {
 		mCaptureFormat = V4L2_PIX_FMT_YUYV; // maybe usb camera
 		printf("capture format: V4L2_PIX_FMT_YUYV  \n");
 	} else {
-		printf("driver should surpport NV21/NV12 or YUYV format, but it not!  \n");
+		printf("driver should surpport NV21/NV12 or YUYV format, but it doesn't!  \n");
 		return -1;
 	}
 
 	CLEAR(fmt);
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	fmt.fmt.pix.width = mVideoWidth; //3
+	fmt.fmt.pix.width = mVideoWidth;
 	fmt.fmt.pix.height = mVideoHeight;
-	fmt.fmt.pix.pixelformat = mCaptureFormat; //V4L2_PIX_FMT_YUV422P;	//
+	fmt.fmt.pix.pixelformat = mCaptureFormat;
 	fmt.fmt.pix.field = V4L2_FIELD_NONE;
-	ioctl(mCamFd, VIDIOC_S_FMT, &fmt);
+	ret = ioctl(mCamFd, VIDIOC_S_FMT, &fmt);
+	if (ret < 0) {
+		printf("Set format failed. %d\n", ret);
+		return -1;
+	}
 
-	struct v4l2_requestbuffers req;
 	CLEAR(req);
-	req.count = 4;
+	req.count = NBUFFER;
 	req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	req.memory = V4L2_MEMORY_MMAP;
-
 	ioctl(mCamFd, VIDIOC_REQBUFS, &req);
+	if (ret < 0) {
+		printf("Setup frame buffers failed. %d\n", ret);
+		return -1;
+	}
 
 	buffers = calloc(req.count, sizeof(struct buffer));
 
-	for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
-		struct v4l2_buffer buf;
+	for (i = 0; i < NBUFFER; i++) {
 		CLEAR(buf);
 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		buf.memory = V4L2_MEMORY_MMAP;
-		buf.index = n_buffers;
+		buf.index = i;
 
-		if (-1 == ioctl(mCamFd, VIDIOC_QUERYBUF, &buf))
+		if (ioctl(mCamFd, VIDIOC_QUERYBUF, &buf) == -1) {
 			printf("VIDIOC_QUERYBUF error\n");
-
-		buffers[n_buffers].length = buf.length;
-		buffers[n_buffers].start = mmap(NULL /* start anywhere */, buf.length,
+			return -1;
+		}
+		buffers[i].length = buf.length;
+		buffers[i].start = mmap(NULL /* start anywhere */, buf.length,
 				PROT_READ | PROT_WRITE /* required */,
 				MAP_SHARED /* recommended */, mCamFd, buf.m.offset);
 
-		if (MAP_FAILED == buffers[n_buffers].start)
+		if (MAP_FAILED == buffers[i].start) {
 			printf("mmap failed\n");
+			return -1;
+		}
 	}
 
-	for (i = 0; i < n_buffers; ++i) {
-		struct v4l2_buffer buf;
+	for (i = 0; i < NBUFFER; i++) {
 		CLEAR(buf);
 
 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		buf.memory = V4L2_MEMORY_MMAP;
 		buf.index = i;
 
-		if (-1 == ioctl(mCamFd, VIDIOC_QBUF, &buf)) {
+		if (ioctl(mCamFd, VIDIOC_QBUF, &buf) == -1) {
 			printf("VIDIOC_QBUF failed\n");
 			return -1;
 		}
 
-		int buffer_len = mVideoWidth * mVideoHeight * 3 / 2;
-		buf_vir_addr[i] = (int) cedara_phymalloc_map(buffer_len, 1024);
-		buf_phy_addr[i] = cedarv_address_vir2phy((void*) buf_vir_addr[i]);
+		buffer_len = mVideoWidth * mVideoHeight * 3 / 2;
+		buf_vir_addr[i] = (int)cedara_phymalloc_map(buffer_len, 1024);
+		buf_phy_addr[i] = cedarv_address_vir2phy((void*)buf_vir_addr[i]);
 		buf_phy_addr[i] |= 0x40000000;
 		printf("video buffer: index: %d, vir: %x, phy: %x, len: %x \n", i,
 				buf_vir_addr[i], buf_phy_addr[i], buffer_len);
 
-		memset((void*) buf_vir_addr[i], 0x10, mVideoWidth * mVideoHeight);
-		memset((void*) buf_vir_addr[i] + mVideoWidth * mVideoHeight, 0x80,
+		memset((void*)buf_vir_addr[i], 0x10, mVideoWidth * mVideoHeight);
+		memset((void*)buf_vir_addr[i] + mVideoWidth * mVideoHeight, 0x80,
 				mVideoWidth * mVideoHeight / 2);
 	}
 
@@ -254,8 +251,8 @@ int InitCapture() {
 }
 
 void DeInitCapture() {
-	int i;
 	enum v4l2_buf_type type;
+	int i;
 
 	printf("DeInitCapture");
 
@@ -265,7 +262,7 @@ void DeInitCapture() {
 	else
 		printf("VIDIOC_STREAMOFF ok\n");
 
-	for (i = 0; i < n_buffers; ++i) {
+	for (i = 0; i < NBUFFER; ++i) {
 		if (-1 == munmap(buffers[i].start, buffers[i].length)) {
 			printf("munmap error\n");
 		}
@@ -359,7 +356,7 @@ int GetPreviewFrame(V4L2BUF_t *pBuf) // DQ buffer for preview or encoder
 		return __LINE__;
 	}
 
-	memset(&buf, 0, sizeof(struct v4l2_buffer));
+	CLEAR(buf);
 	buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	buf.memory = V4L2_MEMORY_MMAP;
 
@@ -373,7 +370,7 @@ int GetPreviewFrame(V4L2BUF_t *pBuf) // DQ buffer for preview or encoder
 	if (mCaptureFormat == V4L2_PIX_FMT_YUYV) {
 		YUYVToNV12(buffers[buf.index].start, (void*) buf_vir_addr[buf.index],
 				mVideoWidth, mVideoHeight);
-	}
+	} 
 
 	if (mCaptureFormat == V4L2_PIX_FMT_YUYV) {
 		pBuf->addrPhyY = buf_phy_addr[buf.index];
